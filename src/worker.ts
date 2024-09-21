@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Context, Hono, Next } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { logger } from 'hono/logger';
 import { prettyJSON } from 'hono/pretty-json';
@@ -27,6 +27,7 @@ interface Env {
 
 interface CloudinaryResource {
 	public_id: string;
+	asset_id: string;
 }
 
 interface CloudinaryResourceDetails {
@@ -40,6 +41,9 @@ interface CloudinaryResourceDetails {
 	asset_id: string;
 	height: number;
 	width: number;
+	image_metadata?: {
+		'Caption-Abstract'?: string;
+	};
 }
 
 interface Image {
@@ -76,8 +80,12 @@ function shuffle<T>(array: T[]): T[] {
 
 function transformCloudinaryUrl(originalUrl: string, size: number | null = null): string {
 	const url = new URL(originalUrl);
-	const fileName = url.pathname.split('/').pop() || '';
+	let fileName = url.pathname.split('/').pop() || '';
 	const aParam = url.searchParams.get('_a');
+
+	// Replace the file extension with .avif
+	fileName = fileName.replace(/\.[^/.]+$/, '.avif');
+
 	let newUrl = `https://images.slovyagin.com/${fileName}`;
 	const params = new URLSearchParams();
 
@@ -102,8 +110,8 @@ async function fetchCloudinaryResources(env: Env): Promise<{ resources: Cloudina
 		`https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/resources/by_asset_folder?${new URLSearchParams({
 			asset_folder: env.CLOUDINARY_FOLDER_PREFIX,
 			max_results: '500',
-			context: 'true',
-			metadata: 'true',
+			context: '1',
+			metadata: '1',
 		}).toString()}`,
 		{
 			method: 'GET',
@@ -123,10 +131,10 @@ async function fetchCloudinaryResources(env: Env): Promise<{ resources: Cloudina
 
 async function fetchCloudinaryResourceDetails(env: Env, publicId: string): Promise<CloudinaryResourceDetails> {
 	const response = await fetch(
-		`https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/resources/image/upload/${publicId}?${new URLSearchParams({
+		`https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/resources/${publicId}?${new URLSearchParams({
 			colors: '1',
-			media_metadata: '1',
-		})}}`,
+			image_metadata: '1',
+		})}`,
 		{
 			headers: {
 				Authorization: `Basic ${btoa(env.CLOUDINARY_API_KEY + ':' + env.CLOUDINARY_API_SECRET)}`,
@@ -146,10 +154,11 @@ async function processCloudinaryResources(env: Env, resources: CloudinaryResourc
 
 	for (const item of resources) {
 		try {
-			const res = await fetchCloudinaryResourceDetails(env, item.public_id);
+			const res = await fetchCloudinaryResourceDetails(env, item.asset_id);
+
 			const baseUrl = transformCloudinaryUrl(res.secure_url, BASELINE_SIZE);
 			const color = res.colors && res.colors.length > 3 ? res.colors[3][0].toLowerCase() : 'transparent';
-			const caption = res.context?.custom?.caption || null;
+			const caption = res?.image_metadata?.['Caption-Abstract'] ?? null;
 			const assetId = res.asset_id.substring(0, 4);
 
 			images.push({
@@ -175,12 +184,12 @@ const app = new Hono<{ Bindings: Env }>();
 app.use(logger());
 app.use(prettyJSON());
 app.get(
-  '*',
-  cache({
-    cacheName: 'build-images',
-    cacheControl: 'max-age=36000',
-  })
-)
+	'*',
+	cache({
+		cacheName: 'build-images',
+		cacheControl: 'max-age=36000',
+	}),
+);
 
 // Error handling middleware
 app.onError((err, c) => {
@@ -192,7 +201,7 @@ app.onError((err, c) => {
 });
 
 // Authentication middleware
-const auth = async (c, next) => {
+const auth = async (c: Context<{ Bindings: Env }>, next: Next) => {
 	if (c.env.NODE_ENV === 'development') {
 		await next();
 	} else {
@@ -213,6 +222,7 @@ app.get('/', auth, async (c) => {
 	]);
 
 	const currentResources = await fetchCloudinaryResources(c.env);
+
 	let images: Image[] = storedImages || [];
 
 	const hasStoredResources = !!storedResources;
@@ -232,7 +242,7 @@ app.get('/', auth, async (c) => {
 	}
 
 	const shuffled = shuffle(images);
-	
+
 	return c.json(shuffled);
 });
 
