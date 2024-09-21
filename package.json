@@ -1,0 +1,17 @@
+{
+	"name": "build-images",
+	"version": "0.0.0",
+	"private": true,
+	"scripts": {
+		"dev": "wrangler dev src/worker.ts",
+		"deploy": "wrangler publish src/worker.ts",
+		"start": "wrangler dev"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20240919.0",
+		"wrangler": "^3.60.3"
+	},
+	"dependencies": {
+		"hono": "^4.6.2"
+	}
+}
