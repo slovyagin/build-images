@@ -1,8 +1,6 @@
 import { Context, Hono, Next } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { logger } from 'hono/logger';
-import { prettyJSON } from 'hono/pretty-json';
-import { cache } from 'hono/cache';
 
 import type { KVNamespace } from '@cloudflare/workers-types';
 import type { StatusCode } from 'hono/utils/http-status';
@@ -182,14 +180,6 @@ async function processCloudinaryResources(env: Env, resources: CloudinaryResourc
 
 const app = new Hono<{ Bindings: Env }>();
 app.use(logger());
-app.use(prettyJSON());
-app.get(
-	'*',
-	cache({
-		cacheName: 'build-images',
-		cacheControl: 'max-age=36000',
-	}),
-);
 
 // Error handling middleware
 app.onError((err, c) => {
@@ -216,9 +206,11 @@ const auth = async (c: Context<{ Bindings: Env }>, next: Next) => {
 };
 
 app.get('/', auth, async (c) => {
+	const forceRegenerate = c.req.query('force') === 'true';
+
 	const [storedResources, storedImages] = await Promise.all([
 		c.env.HOMEPAGE_KV.get(c.env.CLOUDINARY_RESOURCES_KV_KEY_NAME, 'json'),
-		c.env.HOMEPAGE_KV.get(c.env.IMAGES_KV_KEY_NAME, 'json'),
+		c.env.HOMEPAGE_KV.get<Image[]>(c.env.IMAGES_KV_KEY_NAME, 'json'),
 	]);
 
 	const currentResources = await fetchCloudinaryResources(c.env);
@@ -228,7 +220,7 @@ app.get('/', auth, async (c) => {
 	const hasStoredResources = !!storedResources;
 	const resourcesHaveChanged = JSON.stringify(storedResources) !== JSON.stringify(currentResources);
 
-	if (!hasStoredResources || resourcesHaveChanged) {
+	if (forceRegenerate || !hasStoredResources || resourcesHaveChanged) {
 		images = await processCloudinaryResources(c.env, currentResources.resources);
 
 		if (images.length > 0) {
