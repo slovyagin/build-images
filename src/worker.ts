@@ -9,6 +9,7 @@ import type { StatusCode } from 'hono/utils/http-status';
 const MOBILE_SIZE = 800;
 const BASELINE_SIZE = 1280;
 const LARGE_SIZE = 1400;
+const ITEMS_PER_PAGE = 20;
 
 // Interfaces
 interface Env {
@@ -172,6 +173,7 @@ async function processCloudinaryResources(env: Env, resources: CloudinaryResourc
 			});
 		} catch (error) {
 			console.error(`Error processing resource ${item.public_id}:`, error);
+			throw new HTTPException(500, { message: error.message });
 		}
 	}
 
@@ -207,6 +209,8 @@ const auth = async (c: Context<{ Bindings: Env }>, next: Next) => {
 
 app.get('/', auth, async (c) => {
 	const forceRegenerate = c.req.query('force') === 'true';
+	const page = Number.parseInt(c.req.query('page') || '1', 10);
+	const perPage = Number.parseInt(c.req.query('per_page') || String(ITEMS_PER_PAGE), 10);
 
 	const [storedResources, storedImages] = await Promise.all([
 		c.env.HOMEPAGE_KV.get(c.env.CLOUDINARY_RESOURCES_KV_KEY_NAME, 'json'),
@@ -219,9 +223,12 @@ app.get('/', auth, async (c) => {
 
 	const hasStoredResources = !!storedResources;
 	const resourcesHaveChanged = JSON.stringify(storedResources) !== JSON.stringify(currentResources);
-
+	const startIndex = (page - 1) * perPage;
+	const endIndex = startIndex + perPage;
 	if (forceRegenerate || !hasStoredResources || resourcesHaveChanged) {
-		images = await processCloudinaryResources(c.env, currentResources.resources);
+		const paginatedResources = currentResources.resources.slice(startIndex, endIndex);
+
+		images = await processCloudinaryResources(c.env, paginatedResources);
 
 		if (images.length > 0) {
 			await Promise.all([
@@ -231,11 +238,24 @@ app.get('/', auth, async (c) => {
 		} else {
 			images = storedImages || [];
 		}
+	} else {
+		images = images.slice(startIndex, endIndex);
 	}
 
 	const shuffled = shuffle(images);
 
-	return c.json(shuffled);
+	const totalResources = currentResources.resources.length;
+	const totalPages = Math.ceil(totalResources / perPage);
+
+	return c.json({
+		images: shuffled,
+		pagination: {
+			current_page: page,
+			per_page: perPage,
+			total_pages: totalPages,
+			total_items: totalResources,
+		},
+	});
 });
 
 export default app;
