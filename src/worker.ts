@@ -6,10 +6,10 @@ import type { KVNamespace } from '@cloudflare/workers-types';
 import type { StatusCode } from 'hono/utils/http-status';
 
 // Constants
-const MOBILE_SIZE = 800;
-const BASELINE_SIZE = 1280;
+const MOBILE_SIZE = 700;
+const BASELINE_SIZE = 900;
 const LARGE_SIZE = 1400;
-const ITEMS_PER_PAGE = 20;
+const ITEMS_PER_PAGE = 40;
 
 // Interfaces
 interface Env {
@@ -66,15 +66,6 @@ function invertColor(hex: string): boolean {
 	const g = Number.parseInt(hex.slice(2, 4), 16);
 	const b = Number.parseInt(hex.slice(4, 6), 16);
 	return r * 0.299 + g * 0.587 + b * 0.114 > 186;
-}
-
-function shuffle<T>(array: T[]): T[] {
-	for (let i = array.length - 1; i > 0; i--) {
-		const j = Math.floor(Math.random() * (i + 1));
-		[array[i], array[j]] = [array[j], array[i]];
-	}
-
-	return array;
 }
 
 function transformCloudinaryUrl(originalUrl: string, size: number | null = null): string {
@@ -154,7 +145,6 @@ async function processCloudinaryResources(env: Env, resources: CloudinaryResourc
 	for (const item of resources) {
 		try {
 			const res = await fetchCloudinaryResourceDetails(env, item.asset_id);
-
 			const baseUrl = transformCloudinaryUrl(res.secure_url, BASELINE_SIZE);
 			const color = res.colors && res.colors.length > 3 ? res.colors[3][0].toLowerCase() : 'transparent';
 			const caption = res?.image_metadata?.['Caption-Abstract'] ?? null;
@@ -166,8 +156,8 @@ async function processCloudinaryResources(env: Env, resources: CloudinaryResourc
 				color: invertColor(color) ? 'black' : 'white',
 				height: res.height || 0,
 				id: caption ? `${[caption.toLowerCase().replace(/, | /g, '-'), assetId].join('-')}` : `p-${assetId}`,
-				mobileUrl: transformCloudinaryUrl(res.secure_url, MOBILE_SIZE),
 				largeUrl: transformCloudinaryUrl(res.secure_url, LARGE_SIZE),
+				mobileUrl: transformCloudinaryUrl(res.secure_url, MOBILE_SIZE),
 				url: baseUrl,
 				width: res.width || 0,
 			});
@@ -189,7 +179,7 @@ app.onError((err, c) => {
 		return err.getResponse();
 	}
 
-	return c.json({ error: 'Internal Server Error' }, 500);
+	return c.json({ error: 'Internal Server Error', message: err.message }, 500);
 });
 
 // Authentication middleware
@@ -209,46 +199,60 @@ const auth = async (c: Context<{ Bindings: Env }>, next: Next) => {
 
 app.get('/', auth, async (c) => {
 	const forceRegenerate = c.req.query('force') === 'true';
+	const storedResources = await c.env.HOMEPAGE_KV.get(c.env.CLOUDINARY_RESOURCES_KV_KEY_NAME, 'json');
+	const currentResources = await fetchCloudinaryResources(c.env);
+	const resourcesHaveChanged = JSON.stringify(storedResources) !== JSON.stringify(currentResources);
+
+	if (resourcesHaveChanged || forceRegenerate) {
+		await Promise.all([
+			c.env.HOMEPAGE_KV.put(c.env.CLOUDINARY_RESOURCES_KV_KEY_NAME, JSON.stringify(currentResources)),
+			c.env.HOMEPAGE_KV.put(c.env.IMAGES_KV_KEY_NAME, JSON.stringify({})),
+			c.env.HOMEPAGE_KV.put('pages_seeded', JSON.stringify({})),
+		]);
+	}
+
 	const page = Number.parseInt(c.req.query('page') || '1', 10);
 	const perPage = Number.parseInt(c.req.query('per_page') || String(ITEMS_PER_PAGE), 10);
-
-	const [storedResources, storedImages] = await Promise.all([
-		c.env.HOMEPAGE_KV.get(c.env.CLOUDINARY_RESOURCES_KV_KEY_NAME, 'json'),
-		c.env.HOMEPAGE_KV.get<Image[]>(c.env.IMAGES_KV_KEY_NAME, 'json'),
-	]);
-
-	const currentResources = await fetchCloudinaryResources(c.env);
+	const storedImages = await c.env.HOMEPAGE_KV.get<Image[]>(c.env.IMAGES_KV_KEY_NAME, 'json');
 
 	let images: Image[] = storedImages || [];
 
-	const hasStoredResources = !!storedResources;
-	const resourcesHaveChanged = JSON.stringify(storedResources) !== JSON.stringify(currentResources);
 	const startIndex = (page - 1) * perPage;
 	const endIndex = startIndex + perPage;
-	if (forceRegenerate || !hasStoredResources || resourcesHaveChanged) {
+	const totalResources = currentResources.resources.length;
+	const totalPages = Math.ceil(totalResources / perPage);
+
+	const seeded: Record<number, boolean> = (await c.env.HOMEPAGE_KV.get('pages_seeded', 'json')) ?? {};
+
+	if (!seeded[page]) {
 		const paginatedResources = currentResources.resources.slice(startIndex, endIndex);
 
 		images = await processCloudinaryResources(c.env, paginatedResources);
 
-		if (images.length > 0) {
-			await Promise.all([
-				c.env.HOMEPAGE_KV.put(c.env.CLOUDINARY_RESOURCES_KV_KEY_NAME, JSON.stringify(currentResources)),
-				c.env.HOMEPAGE_KV.put(c.env.IMAGES_KV_KEY_NAME, JSON.stringify(images)),
-			]);
-		} else {
-			images = storedImages || [];
-		}
+		await Promise.all([
+			c.env.HOMEPAGE_KV.put(
+				c.env.IMAGES_KV_KEY_NAME,
+				JSON.stringify({
+					...storedImages,
+					[page]: images,
+				}),
+			),
+			c.env.HOMEPAGE_KV.put(
+				'pages_seeded',
+				JSON.stringify({
+					...seeded,
+					[page]: true,
+				}),
+			),
+		]);
 	} else {
-		images = images.slice(startIndex, endIndex);
+		const stored = await c.env.HOMEPAGE_KV.get(c.env.IMAGES_KV_KEY_NAME, 'json');
+
+		images = stored[page];
 	}
 
-	const shuffled = shuffle(images);
-
-	const totalResources = currentResources.resources.length;
-	const totalPages = Math.ceil(totalResources / perPage);
-
 	return c.json({
-		images: shuffled,
+		images,
 		pagination: {
 			current_page: page,
 			per_page: perPage,
