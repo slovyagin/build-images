@@ -1,4 +1,4 @@
-import { Context, Hono, Next } from 'hono';
+import { type Context, Hono, type Next } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { logger } from 'hono/logger';
 
@@ -107,7 +107,7 @@ async function fetchCloudinaryResources(env: Env): Promise<{ resources: Cloudina
 			method: 'GET',
 			headers: {
 				'Content-Type': 'application/json',
-				Authorization: `Basic ${btoa(env.CLOUDINARY_API_KEY + ':' + env.CLOUDINARY_API_SECRET)}`,
+				Authorization: `Basic ${btoa(`${env.CLOUDINARY_API_KEY}:${env.CLOUDINARY_API_SECRET}`)}`,
 			},
 		},
 	);
@@ -127,7 +127,7 @@ async function fetchCloudinaryResourceDetails(env: Env, publicId: string): Promi
 		})}`,
 		{
 			headers: {
-				Authorization: `Basic ${btoa(env.CLOUDINARY_API_KEY + ':' + env.CLOUDINARY_API_SECRET)}`,
+				Authorization: `Basic ${btoa(`${env.CLOUDINARY_API_KEY}:${env.CLOUDINARY_API_SECRET}`)}`,
 			},
 		},
 	);
@@ -171,6 +171,7 @@ async function processCloudinaryResources(env: Env, resources: CloudinaryResourc
 }
 
 const app = new Hono<{ Bindings: Env }>();
+
 app.use(logger());
 
 // Error handling middleware
@@ -184,77 +185,58 @@ app.onError((err, c) => {
 
 // Authentication middleware
 const auth = async (c: Context<{ Bindings: Env }>, next: Next) => {
-	if (c.env.NODE_ENV === 'development') {
-		await next();
-	} else {
-		const apiKey = c.req.header('X-API-Key');
+	const apiKey = c.req.header('X-API-Key');
 
-		if (apiKey !== c.env.API_SECRET_KEY) {
-			throw new HTTPException(401, { message: 'Unauthorized' });
-		}
-
-		await next();
+	if (apiKey !== c.env.API_SECRET_KEY) {
+		throw new HTTPException(401, { message: 'Unauthorized' });
 	}
+
+	await next();
 };
 
 app.get('/', auth, async (c) => {
 	const forceRegenerate = c.req.query('force') === 'true';
-	const storedResources = await c.env.HOMEPAGE_KV.get(c.env.CLOUDINARY_RESOURCES_KV_KEY_NAME, 'json');
-	const currentResources = await fetchCloudinaryResources(c.env);
+	const [storedResources, currentResources] = await Promise.all([
+		c.env.HOMEPAGE_KV.get(c.env.CLOUDINARY_RESOURCES_KV_KEY_NAME, 'json'),
+		fetchCloudinaryResources(c.env),
+	]);
 	const resourcesHaveChanged = JSON.stringify(storedResources) !== JSON.stringify(currentResources);
 
 	if (resourcesHaveChanged || forceRegenerate) {
 		await Promise.all([
 			c.env.HOMEPAGE_KV.put(c.env.CLOUDINARY_RESOURCES_KV_KEY_NAME, JSON.stringify(currentResources)),
 			c.env.HOMEPAGE_KV.put(c.env.IMAGES_KV_KEY_NAME, JSON.stringify({})),
-			c.env.HOMEPAGE_KV.put('pages_seeded', JSON.stringify({})),
 		]);
 	}
 
-	const page = Number.parseInt(c.req.query('page') || '1', 10);
+	const currentPage = Number.parseInt(c.req.query('page') || '1', 10);
 	const perPage = Number.parseInt(c.req.query('per_page') || String(ITEMS_PER_PAGE), 10);
-	const storedImages = await c.env.HOMEPAGE_KV.get<Image[]>(c.env.IMAGES_KV_KEY_NAME, 'json');
-
-	let images: Image[] = storedImages || [];
-
-	const startIndex = (page - 1) * perPage;
+	const storedImages = await c.env.HOMEPAGE_KV.get<Record<number, Image[]>>(c.env.IMAGES_KV_KEY_NAME, 'json');
+	const startIndex = (currentPage - 1) * perPage;
 	const endIndex = startIndex + perPage;
 	const totalResources = currentResources.resources.length;
 	const totalPages = Math.ceil(totalResources / perPage);
 
-	const seeded: Record<number, boolean> = (await c.env.HOMEPAGE_KV.get('pages_seeded', 'json')) ?? {};
+	let images: Image[] = storedImages?.[currentPage] || [];
 
-	if (!seeded[page]) {
+	if (!storedImages?.[currentPage] && currentPage > 0 && currentPage <= totalPages) {
 		const paginatedResources = currentResources.resources.slice(startIndex, endIndex);
 
 		images = await processCloudinaryResources(c.env, paginatedResources);
 
-		await Promise.all([
-			c.env.HOMEPAGE_KV.put(
-				c.env.IMAGES_KV_KEY_NAME,
-				JSON.stringify({
-					...storedImages,
-					[page]: images,
-				}),
-			),
-			c.env.HOMEPAGE_KV.put(
-				'pages_seeded',
-				JSON.stringify({
-					...seeded,
-					[page]: true,
-				}),
-			),
-		]);
-	} else {
-		const stored = await c.env.HOMEPAGE_KV.get(c.env.IMAGES_KV_KEY_NAME, 'json');
-
-		images = stored[page];
+		await c.env.HOMEPAGE_KV.put(
+			c.env.IMAGES_KV_KEY_NAME,
+			JSON.stringify({
+				...storedImages,
+				[currentPage]: images,
+			}),
+		);
 	}
 
 	return c.json({
 		images,
 		pagination: {
-			current_page: page,
+			current_page: currentPage,
 			per_page: perPage,
 			total_pages: totalPages,
 			total_items: totalResources,
