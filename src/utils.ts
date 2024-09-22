@@ -1,13 +1,46 @@
+const rgbToHsl = (r: number, g: number, b: number) => {
+	const red = r / 255;
+	const green = g / 255;
+	const blue = b / 255;
+	const max = Math.max(red, green, blue);
+	const min = Math.min(red, green, blue);
+	let h: number;
+	let s: number;
+	const l = (max + min) / 2;
+	if (max === min) {
+		h = s = 0;
+	} else {
+		const d = max - min;
+		s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+		switch (max) {
+			case red:
+				h = (green - blue) / d + (green < blue ? 6 : 0);
+				break;
+			case green:
+				h = (blue - red) / d + 2;
+				break;
+			case blue:
+				h = (red - green) / d + 4;
+				break;
+		}
+		// @ts-ignore
+		h = h / 6;
+	}
+	return [h, s, l];
+};
+
 export const invertColor = (hex: string) => {
-	if (hex.indexOf('#') === 0) hex = hex.slice(1);
-	if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
-	if (hex.length !== 6) return false;
+	const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+	
+	if (!result) {
+		return false;
+	}
+	
+	const r = Number.parseInt(result[1] ?? '0', 16);
+	const g = Number.parseInt(result[2] ?? '0', 16);
+	const b = Number.parseInt(result[3] ?? '0', 16);
 
-	const r = Number.parseInt(hex.slice(0, 2), 16);
-	const g = Number.parseInt(hex.slice(2, 4), 16);
-	const b = Number.parseInt(hex.slice(4, 6), 16);
-
-	return r * 0.299 + g * 0.587 + b * 0.114 > 186;
+	return Number(rgbToHsl(r, g, b)[2]) > 0.5;
 };
 
 export const transformCloudinaryUrl = (originalUrl: string, size: number | null = null) => {
