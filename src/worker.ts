@@ -54,7 +54,7 @@ interface Image {
 	width: number;
 }
 
-async function fetchCloudinaryResources(env: Env): Promise<{ resources: CloudinaryResource[] }> {
+async function fetchFolder(env: Env): Promise<{ resources: CloudinaryResource[] }> {
 	const response = await fetch(
 		`https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/resources/by_asset_folder?${new URLSearchParams({
 			asset_folder: env.CLOUDINARY_FOLDER_PREFIX,
@@ -78,7 +78,7 @@ async function fetchCloudinaryResources(env: Env): Promise<{ resources: Cloudina
 	return await response.json();
 }
 
-async function fetchCloudinaryResourceDetails(env: Env, publicId: string): Promise<CloudinaryResource> {
+async function fetchResource(env: Env, publicId: string): Promise<CloudinaryResource> {
 	const response = await fetch(
 		`https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/resources/${publicId}?${new URLSearchParams({
 			colors: '1',
@@ -98,12 +98,12 @@ async function fetchCloudinaryResourceDetails(env: Env, publicId: string): Promi
 	return await response.json();
 }
 
-async function processCloudinaryResources(env: Env, resources: CloudinaryResource[]): Promise<Image[]> {
+async function processResources(env: Env, resources: CloudinaryResource[]): Promise<Image[]> {
 	const images: Image[] = [];
 
 	for (const item of resources) {
 		try {
-			const res = await fetchCloudinaryResourceDetails(env, item.asset_id);
+			const res = await fetchResource(env, item.asset_id);
 			const baseUrl = transformCloudinaryUrl(res.secure_url, BASELINE_SIZE);
 			const color = res.colors && res.colors.length > 3 ? res.colors[3][0].toLowerCase() : 'transparent';
 			const caption = res?.image_metadata?.['Caption-Abstract'] ?? null;
@@ -158,7 +158,7 @@ app.get('/', auth, async (c) => {
 	const forceRegenerate = c.req.query('force') === 'true';
 	const [storedResources, currentResources] = await Promise.all([
 		c.env.HOMEPAGE_KV.get<Record<string, unknown>>(c.env.CLOUDINARY_RESOURCES_KV_KEY_NAME, 'json'),
-		fetchCloudinaryResources(c.env),
+		fetchFolder(c.env),
 	]);
 	const resourcesHaveChanged = JSON.stringify(storedResources) !== JSON.stringify(currentResources);
 
@@ -181,7 +181,7 @@ app.get('/', auth, async (c) => {
 	if (!storedImages?.[currentPage] && currentPage > 0 && currentPage <= totalPages) {
 		const paginatedResources = currentResources.resources.slice(startIndex, endIndex);
 
-		images = await processCloudinaryResources(c.env, paginatedResources);
+		images = await processResources(c.env, paginatedResources);
 
 		await c.env.HOMEPAGE_KV.put(
 			c.env.IMAGES_KV_KEY_NAME,
