@@ -155,12 +155,12 @@ const auth = async (c: Context<{ Bindings: Env }>, next: Next) => {
 };
 
 app.get('/', auth, async (c) => {
-	const forceRegenerate = c.req.query('force') === 'true';
 	const [storedResources, currentResources] = await Promise.all([
 		c.env.HOMEPAGE_KV.get<Record<string, unknown>>(c.env.CLOUDINARY_RESOURCES_KV_KEY_NAME, 'json'),
 		fetchFolder(c.env),
 	]);
 	const resourcesHaveChanged = JSON.stringify(storedResources) !== JSON.stringify(currentResources);
+	const forceRegenerate = c.req.query('force') === 'true';
 
 	if (resourcesHaveChanged || forceRegenerate) {
 		await Promise.all([
