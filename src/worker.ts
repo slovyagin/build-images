@@ -154,6 +154,9 @@ const auth = async (c: Context<{ Bindings: Env }>, next: Next) => {
 	await next();
 };
 
+// Pagination middleware
+const paginate = async (c: Context<{ Bindings: Env }>, next: Next) => { }
+
 app.get('/', auth, async (c) => {
 	const [storedResources, currentResources] = await Promise.all([
 		c.env.HOMEPAGE_KV.get<Record<string, unknown>>(c.env.CLOUDINARY_RESOURCES_KV_KEY_NAME, 'json'),
@@ -193,6 +196,27 @@ app.get('/', auth, async (c) => {
 	}
 
 	return c.json({
+		images,
+		pagination: {
+			current_page: currentPage,
+			per_page: ITEMS_PER_PAGE,
+			total_pages: totalPages,
+			total_items: totalResources,
+		},
+	});
+});
+
+app.get('/dev', auth, async (c) => {
+  const currentPage = Number.parseInt(c.req.query('page') || '1', 10);
+  const [storedResources, storedImages] =  await Promise.all([
+    c.env.HOMEPAGE_KV.get<Record<string, unknown>>(c.env.CLOUDINARY_RESOURCES_KV_KEY_NAME, 'json'),
+    c.env.HOMEPAGE_KV.get<Record<number, Image[]>>(c.env.IMAGES_KV_KEY_NAME, 'json')
+  ]);
+  const images: Image[] = storedImages?.[currentPage] || [];
+	const totalResources = storedResources?.resources.length;
+	const totalPages = Math.ceil(totalResources / ITEMS_PER_PAGE);
+  
+  return c.json({
 		images,
 		pagination: {
 			current_page: currentPage,
