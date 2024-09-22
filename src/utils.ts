@@ -26,8 +26,7 @@ export const transformCloudinaryUrl = (originalUrl: string, size: number | null 
 	}
 
 	if (size) {
-		params.set('h', size.toString());
-		params.set('w', size.toString());
+		params.set('s', size.toString());
 	}
 
 	if (params.toString()) {
