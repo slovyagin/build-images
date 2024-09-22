@@ -104,21 +104,21 @@ async function processResources(env: Env, resources: CloudinaryResource[]): Prom
 	for (const item of resources) {
 		try {
 			const res = await fetchResource(env, item.asset_id);
-			const baseUrl = transformCloudinaryUrl(res.secure_url, BASELINE_SIZE);
-			const color = res.colors && res.colors.length > 3 ? res.colors[3][0].toLowerCase() : 'transparent';
+			const assetId = item.asset_id.substring(0, 4);
+			const backgroundColor = res.colors?.[3]?.[0]?.toLowerCase() ?? '#fff';
 			const caption = res?.image_metadata?.['Caption-Abstract'] ?? null;
-			const assetId = res.asset_id.substring(0, 4);
+			const url = (size: number) => transformCloudinaryUrl(res.secure_url, size)
 
 			images.push({
-				backgroundColor: color,
+				backgroundColor,
 				caption,
-				color: invertColor(color) ? 'black' : 'white',
-				height: res.height || 0,
+				color: invertColor(backgroundColor) ? 'black' : 'white',
+				height: res.height ?? 0,
 				id: caption ? `${[caption.toLowerCase().replace(/, | /g, '-'), assetId].join('-')}` : `p-${assetId}`,
-				largeUrl: transformCloudinaryUrl(res.secure_url, LARGE_SIZE),
-				mobileUrl: transformCloudinaryUrl(res.secure_url, MOBILE_SIZE),
-				url: baseUrl,
-				width: res.width || 0,
+				largeUrl: url(LARGE_SIZE),
+				mobileUrl: url(MOBILE_SIZE),
+				url: url(BASELINE_SIZE),
+				width: res.width ?? 0,
 			});
 		} catch (error) {
 			console.error(`Error processing resource ${item.public_id}:`, error);
