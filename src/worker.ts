@@ -5,6 +5,8 @@ import { logger } from 'hono/logger';
 import type { KVNamespace } from '@cloudflare/workers-types';
 import type { StatusCode } from 'hono/utils/http-status';
 
+import { invertColor, transformCloudinaryUrl } from './utils';
+
 // Constants
 const MOBILE_SIZE = 700;
 const BASELINE_SIZE = 900;
@@ -13,33 +15,28 @@ const ITEMS_PER_PAGE = 40;
 
 // Interfaces
 interface Env {
-	HOMEPAGE_KV: KVNamespace;
-	CLOUDINARY_RESOURCES_KV_KEY_NAME: string;
-	IMAGES_KV_KEY_NAME: string;
 	API_SECRET_KEY: string;
-	CLOUDINARY_CLOUD_NAME: string;
 	CLOUDINARY_API_KEY: string;
 	CLOUDINARY_API_SECRET: string;
+	CLOUDINARY_CLOUD_NAME: string;
 	CLOUDINARY_FOLDER_PREFIX: string;
-	NODE_ENV?: string;
+	CLOUDINARY_RESOURCES_KV_KEY_NAME: string;
+	HOMEPAGE_KV: KVNamespace;
+	IMAGES_KV_KEY_NAME: string;
 }
 
 interface CloudinaryResource {
-	public_id: string;
 	asset_id: string;
-}
-
-interface CloudinaryResourceDetails {
-	secure_url: string;
+	height: number;
+	width: number;
 	colors: string[][];
+	public_id: string;
+	secure_url: string;
 	context?: {
 		custom?: {
 			caption?: string;
 		};
 	};
-	asset_id: string;
-	height: number;
-	width: number;
 	image_metadata?: {
 		'Caption-Abstract'?: string;
 	};
@@ -55,44 +52,6 @@ interface Image {
 	largeUrl: string;
 	url: string;
 	width: number;
-}
-
-function invertColor(hex: string): boolean {
-	if (hex.indexOf('#') === 0) hex = hex.slice(1);
-	if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
-	if (hex.length !== 6) return false;
-
-	const r = Number.parseInt(hex.slice(0, 2), 16);
-	const g = Number.parseInt(hex.slice(2, 4), 16);
-	const b = Number.parseInt(hex.slice(4, 6), 16);
-	return r * 0.299 + g * 0.587 + b * 0.114 > 186;
-}
-
-function transformCloudinaryUrl(originalUrl: string, size: number | null = null): string {
-	const url = new URL(originalUrl);
-	let fileName = url.pathname.split('/').pop() || '';
-	const aParam = url.searchParams.get('_a');
-
-	// Replace the file extension with .avif
-	fileName = fileName.replace(/\.[^/.]+$/, '.avif');
-
-	let newUrl = `https://images.slovyagin.com/${fileName}`;
-	const params = new URLSearchParams();
-
-	if (aParam) {
-		params.set('_a', aParam);
-	}
-
-	if (size) {
-		params.set('h', size.toString());
-		params.set('w', size.toString());
-	}
-
-	if (params.toString()) {
-		newUrl += '?' + params.toString();
-	}
-
-	return newUrl;
 }
 
 async function fetchCloudinaryResources(env: Env): Promise<{ resources: CloudinaryResource[] }> {
@@ -119,7 +78,7 @@ async function fetchCloudinaryResources(env: Env): Promise<{ resources: Cloudina
 	return await response.json();
 }
 
-async function fetchCloudinaryResourceDetails(env: Env, publicId: string): Promise<CloudinaryResourceDetails> {
+async function fetchCloudinaryResourceDetails(env: Env, publicId: string): Promise<CloudinaryResource> {
 	const response = await fetch(
 		`https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/resources/${publicId}?${new URLSearchParams({
 			colors: '1',
@@ -163,6 +122,7 @@ async function processCloudinaryResources(env: Env, resources: CloudinaryResourc
 			});
 		} catch (error) {
 			console.error(`Error processing resource ${item.public_id}:`, error);
+			
 			throw new HTTPException(500, { message: error.message });
 		}
 	}
@@ -197,7 +157,7 @@ const auth = async (c: Context<{ Bindings: Env }>, next: Next) => {
 app.get('/', auth, async (c) => {
 	const forceRegenerate = c.req.query('force') === 'true';
 	const [storedResources, currentResources] = await Promise.all([
-		c.env.HOMEPAGE_KV.get(c.env.CLOUDINARY_RESOURCES_KV_KEY_NAME, 'json'),
+		c.env.HOMEPAGE_KV.get<Record<string, unknown>>(c.env.CLOUDINARY_RESOURCES_KV_KEY_NAME, 'json'),
 		fetchCloudinaryResources(c.env),
 	]);
 	const resourcesHaveChanged = JSON.stringify(storedResources) !== JSON.stringify(currentResources);
@@ -210,12 +170,11 @@ app.get('/', auth, async (c) => {
 	}
 
 	const currentPage = Number.parseInt(c.req.query('page') || '1', 10);
-	const perPage = Number.parseInt(c.req.query('per_page') || String(ITEMS_PER_PAGE), 10);
 	const storedImages = await c.env.HOMEPAGE_KV.get<Record<number, Image[]>>(c.env.IMAGES_KV_KEY_NAME, 'json');
-	const startIndex = (currentPage - 1) * perPage;
-	const endIndex = startIndex + perPage;
+	const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+	const endIndex = startIndex + ITEMS_PER_PAGE;
 	const totalResources = currentResources.resources.length;
-	const totalPages = Math.ceil(totalResources / perPage);
+	const totalPages = Math.ceil(totalResources / ITEMS_PER_PAGE);
 
 	let images: Image[] = storedImages?.[currentPage] || [];
 
@@ -237,7 +196,7 @@ app.get('/', auth, async (c) => {
 		images,
 		pagination: {
 			current_page: currentPage,
-			per_page: perPage,
+			per_page: ITEMS_PER_PAGE,
 			total_pages: totalPages,
 			total_items: totalResources,
 		},
