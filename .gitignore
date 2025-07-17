@@ -1,4 +1,6 @@
 wrangler.toml
+.wrangler/
+.idea/
 
 # Logs
 
